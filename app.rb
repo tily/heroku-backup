@@ -9,18 +9,23 @@ class X < Sinatra::Base
 	enable :inline_templates
 
 	def backup
-		heroku = Heroku::API.new(api_key: ENV['HEROKU_API_KEY'])
+		@heroku = Heroku::API.new(api_key: ENV['HEROKU_API_KEY'])
 		@bucket = AWS::S3.new.buckets[ENV['AWS_BUCKET']]
+		@apps = @heroku.get_apps.body
+		upload
+		report
+	end
+
+	def upload
 		@app_names
 		measure("backup") do
-			@apps = heroku.get_apps.body
 			@apps.each do |app|
 				app_name = app['name']
-				addons = heroku.get_addons(app_name).body
+				addons = @heroku.get_addons(app_name).body
 				next unless addons.find {|addon| addon['name'].match(/^mongohq:/) }
 				
 				measure("backup #{app_name}") do
-					config_vars = heroku.get_config_vars(app_name).body
+					config_vars = @heroku.get_config_vars(app_name).body
 					mongohq_url = config_vars.find {|key, value| key == 'MONGOHQ_URL' }.last
 					uri = URI.parse(mongohq_url)
 					db = uri.path.gsub(/^\//, '')
@@ -42,10 +47,16 @@ class X < Sinatra::Base
 			end
 		end
 		FileUtils.rm_rf('dump/')
+	end
+
+	def report
 		object = @bucket.objects['index.html']
 		object.write haml(:index)
 		object.acl = :public_read
-		puts object.url_for(:read)
+
+		object = @bucket.objects['feed']
+		object.write builder(:feed)
+		object.acl = :public_read
 	end
 	
 	def measure(message)
@@ -74,16 +85,36 @@ __END__
 !!! 5
 %html
 	%head
+		%meta{name:"viewport",content:"width=device-width,initial-scale=1.0"}
+		%title= "heroku backup of #{ENV['BACKUP_TITLE']}"
 		%link{rel:'stylesheet',href:'//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css'}
 	%body
 		%div.container
-			%h1 heroku backup
+			%h1= "heroku backup of #{ENV['BACKUP_TITLE']}"
+			%p= "Last Update: #{Time.now.rfc822}"
 			- @apps.each do |app|
+				- addons = @heroku.get_addons(app['name']).body
+				- next unless addons.find {|addon| addon['name'].match(/^mongohq:/) }
 				%h2= app['name']
 				%ul.list-group
-					- @bucket.objects.with_prefix("#{app['app_name']}_production").each do |object|
+					- @bucket.objects.with_prefix("#{app['name']}_production").each do |object|
 						%li.list-group-item
 							= object.key
-							= '...'
-							%span.badge= object.content_length/1000.0
-							KB
+							%span.badge= "#{object.content_length/1000.0} KB"
+@@ feed
+xml.instruct! :xml, :version => '1.0'
+xml.rss :version => "2.0", :"xmlns:atom" => "http://www.w3.org/2005/Atom" do
+	xml.channel do
+		xml.tag! "atom:link", :href => "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/feed", :rel => "self", :type => "application/rss+xml"
+		xml.title "heroku backup of #{ENV['BACKUP_TITLE']}"
+		xml.description "heroku backup of #{ENV['BACKUP_TITLE']}"
+		xml.link "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/"
+		xml.item do
+			xml.title "heroku backup of #{ENV['BACKUP_TITLE']}"
+			xml.description "heroku backup of #{ENV['BACKUP_TITLE']}"
+			xml.link "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/"
+			xml.pubDate Time.now.rfc822
+			xml.guid({:isPermaLink => false}, Time.now.rfc822)
+		end
+	end
+end

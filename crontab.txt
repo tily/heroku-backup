@@ -1,0 +1,1 @@
+0 0 * * * bash -c "cd /root/dev/heroku-backup && source env.sh && /root/.rbenv/versions/2.1.2/bin/bundle exec /root/.rbenv/shims/ruby app.rb"
