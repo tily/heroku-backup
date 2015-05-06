@@ -13,7 +13,7 @@ class X < Sinatra::Base
 		@bucket = AWS::S3.new.buckets[ENV['AWS_BUCKET']]
 		@apps = @heroku.get_apps.body
 		upload
-		report
+		#report
 	end
 
 	def upload
@@ -22,11 +22,11 @@ class X < Sinatra::Base
 			@apps.each do |app|
 				app_name = app['name']
 				addons = @heroku.get_addons(app_name).body
-				next unless addons.find {|addon| addon['name'].match(/^mongohq:/) }
+				next unless addons.find {|addon| addon['name'].match(/^(mongohq|mongolab):/) }
 				
 				measure("backup #{app_name}") do
 					config_vars = @heroku.get_config_vars(app_name).body
-					mongohq_url = config_vars.find {|key, value| key == 'MONGOHQ_URL' }.last
+					mongohq_url = config_vars.find {|key, value| %(MONGOHQ_URL MONGOLAB_URI).include?(key) }.last
 					uri = URI.parse(mongohq_url)
 					db = uri.path.gsub(/^\//, '')
 					execute ["mongodump", "--host", uri.host, "--port", uri.port, "--db", db, "--username", uri.user, "--password", uri.password].join(' ')
@@ -86,15 +86,16 @@ __END__
 %html
 	%head
 		%meta{name:"viewport",content:"width=device-width,initial-scale=1.0"}
-		%title= "heroku backup of #{ENV['BACKUP_TITLE']}"
+		%title= ENV['BACKUP_TITLE']
 		%link{rel:'stylesheet',href:'//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css'}
 	%body
 		%div.container
-			%h1= "heroku backup of #{ENV['BACKUP_TITLE']}"
+			%h1= ENV['BACKUP_TITLE']
 			%p= "Last Update: #{Time.now.rfc822}"
 			- @apps.each do |app|
+				- next if ENV['EXCLUDE_APP_NAMES'] && ENV['EXCLUDE_APP_NAMES'].split(',').include?(app['name'])
 				- addons = @heroku.get_addons(app['name']).body
-				- next unless addons.find {|addon| addon['name'].match(/^mongohq:/) }
+				- next unless addons.find {|addon| addon['name'].match(/^(mongohq|mongolab):/) }
 				%h2= app['name']
 				%ul.list-group
 					- @bucket.objects.with_prefix("#{app['name']}_production").each do |object|
@@ -106,13 +107,13 @@ xml.instruct! :xml, :version => '1.0'
 xml.rss :version => "2.0", :"xmlns:atom" => "http://www.w3.org/2005/Atom" do
 	xml.channel do
 		xml.tag! "atom:link", :href => "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/feed", :rel => "self", :type => "application/rss+xml"
-		xml.title "heroku backup of #{ENV['BACKUP_TITLE']}"
-		xml.description "heroku backup of #{ENV['BACKUP_TITLE']}"
+		xml.title ENV['BACKUP_TITLE']
+		xml.description ENV['BACKUP_TITLE']
 		xml.link "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/"
 		xml.item do
-			xml.title "heroku backup of #{ENV['BACKUP_TITLE']}"
-			xml.description "heroku backup of #{ENV['BACKUP_TITLE']}"
-			xml.link "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/"
+			xml.title ENV['BACKUP_TITLE']
+			xml.description ENV['BACKUP_TITLE']
+			xml.link "http://#{ENV['AWS_BUCKET']}.s3-website-ap-northeast-1.amazonaws.com/##{Time.now.to_i}"
 			xml.pubDate Time.now.rfc822
 			xml.guid({:isPermaLink => false}, Time.now.rfc822)
 		end
